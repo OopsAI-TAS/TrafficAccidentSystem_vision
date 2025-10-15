@@ -5,3 +5,10 @@ lap
 filterpy
 scikit-image
 torchvision
+prefetch_generator
+yacs
+torch
+transformers
+accelerate
+tqdm
+wandb

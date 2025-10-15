@@ -1,0 +1,5 @@
+__pycache__/
+image_testdata/
+output/
+./__init__.py
+yolo_trained/

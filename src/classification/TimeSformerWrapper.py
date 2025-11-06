@@ -41,7 +41,7 @@ class TimeSformerWrapper(nn.Module):
 
         device = next(self.model.parameters()).device
         for k, v in inputs.items():
-            if torch.is_tensor:
+            if torch.is_tensor(v):
                 inputs[k] = v.to(device, non_blocking=True)
         if labels is not None: 
             labels = labels.to(device, non_blocking=True)
@@ -54,7 +54,7 @@ class TimeSformerWrapper(nn.Module):
     
     def _prepare_inputs(self, frames):
         if isinstance(frames, torch.Tensor):
-            assert frames.fim() == 5, "Tensor input must be (B, T, C, H, W)"
+            assert frames.dim() == 5, "Tensor input must be (B, T, C, H, W)"
             b, t, c, h, w = frames.shape
 
             frame_list = []

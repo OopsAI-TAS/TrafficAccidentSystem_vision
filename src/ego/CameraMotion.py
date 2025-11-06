@@ -10,7 +10,7 @@ class CameraMotion:
         self.ema = ema
         self.cool = cool
         self.last_emit = -9999
-        self.state = {"t_ema":0.0, "r_ema":0.0}  # translation(px), rotation(deg)
+        self.state = {"t_ema":0.0, "r_ema":0.0, "yaw_deg": 0.0, "speed":0.0}  
         self.trans_thr = trans_thr * fps/30.0     # fps 보정
         self.rot_thr   = rot_thr_deg * fps/30.0   # fps 보정
 
@@ -18,35 +18,38 @@ class CameraMotion:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         if self.prev_gray is None:
             self.prev_gray = gray
-            return None  # 초기 프레임
+            return None, None  # 초기 프레임
 
         # 특징점 추적
         p0 = cv2.goodFeaturesToTrack(self.prev_gray, maxCorners=500, qualityLevel=0.01, minDistance=8)
         if p0 is None or len(p0)<20:
             self.prev_gray = gray
-            return None
+            return None, None
 
         p1, st, err = cv2.calcOpticalFlowPyrLK(self.prev_gray, gray, p0, None,
                                                winSize=(21,21), maxLevel=3,
                                                criteria=(cv2.TERM_CRITERIA_EPS|cv2.TERM_CRITERIA_COUNT, 30, 0.01))
         good0 = p0[st[:,0]==1]; good1 = p1[st[:,0]==1]
+        self.prev_gray = gray
         if len(good0)<15:
             self.prev_gray = gray
             return None
 
         # 전역 변환 추정 (유사변환: 회전+스케일+이동)
         M, inliers = cv2.estimateAffinePartial2D(good0, good1, method=cv2.RANSAC, ransacReprojThreshold=3.0, maxIters=2000, refineIters=15)
-        self.prev_gray = gray
         if M is None:
             return None
 
         dx, dy = M[0,2], M[1,2]
         # 회전 추정 (scale 무시, 각도만)
-        r = math.degrees(math.atan2(M[1,0], M[0,0]))
+        yaw = math.degrees(math.atan2(M[1,0], M[0,0]))
+        tmag = math.hypot(dx, dy)
 
         # EMA
         self.state["t_ema"] = self.ema*self.state["t_ema"] + (1-self.ema)*math.hypot(dx,dy)
         self.state["r_ema"] = self.ema*self.state["r_ema"] + (1-self.ema)*abs(r)
+        self.state["yaw_deg"] = yaw
+        self.state["speed"] = self.state["t_ema"]
 
         # 이벤트 판정
         evt = None
@@ -57,4 +60,4 @@ class CameraMotion:
                        "r_deg": float(self.state["r_ema"]),
                        "frame": int(frame_idx)}
                 self.last_emit = frame_idx
-        return evt
+        return evt, dict(self.state)

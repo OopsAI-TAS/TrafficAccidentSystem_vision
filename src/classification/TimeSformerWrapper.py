@@ -24,6 +24,11 @@ class TimeSformerWrapper(nn.Module):
         )
         self.freeze_backbone(except_head=True)
 
+    def load_weights(self, ckpt_path: str):
+        ckpt = torch.loas(ckpt_path, map_location="cpu")
+        state = ckpt.get("model_state_dict", ckpt)
+        self.model.load_state_dict(state, strict=False)
+
     def freeze_backbone(self, except_head: bool = True):
         for p in self.model.parameters(): 
             p.requires_grad = False

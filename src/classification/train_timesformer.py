@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from TimeSformerWrapper import TimeSformerWrapper 
 import wandb, os
 from collections import Counter
-from tqdm.autonotebook import tqdm
+from tqdm.auto import tqdm
 from videodataset import VideoDataset
 
 # 매핑 딕셔너리 인덱스로 바꾸기
@@ -27,7 +27,7 @@ CLASSES= {
 }
 
 NUM_CLASSES = len(CLASSES)
-EPOCHS = 50
+EPOCHS = 100
 BATCH = 4
 GRAD_ACCUM = 4
 num_workers = 2
@@ -57,7 +57,7 @@ def evaluate(model, loader, device):
     
 def main(): 
     wandb.init(
-        project="traffic_accident_timesformer",
+        project="traffic_accident_system",
         name="vehi-head",
         config={
             "model": "facebook/timesformer-base-finetuned-k400",
@@ -111,15 +111,17 @@ def main():
     scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=5, gamma=0.5)
     scaler = torch.cuda.amp.GradScaler()
 
-    if os.path.exists("/content/drive/MyDrive/TrafficAccidentSystem/TrafficAccidentSystem/best_vehi.ckpt") and ('best_val' in torch.load("best_vehi.ckpt")):
-        checkpoint = torch.load("best_vehi.ckpt")
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optim.load_state_dict(checkpoint['optimizer_state_dict'])
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        start_epoch = checkpoint['epoch'] + 1
-        best_val = checkpoint.get('best_val', float('inf'))
-        global_step = checkpoint['global_step']
-        print(f"✅ Checkpoint loaded. Resume from epoch {start_epoch}, best_val={best_val:.4f}")
+    ckpt_path = "/content/drive/MyDrive/TrafficAccidentSystem/TrafficAccidentSystem/ckpts/best_vehi.ckpt"
+    if os.path.exists(ckpt_path):
+        checkpoint = torch.load(ckpt_path, map_location='cpu')
+        if 'best_val' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optim.load_state_dict(checkpoint['optimizer_state_dict'])
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+            best_val = checkpoint.get('best_val', float('inf'))
+            global_step = checkpoint['global_step']
+            print(f"✅ Checkpoint loaded. Resume from epoch {start_epoch}, best_val={best_val:.4f}")
     else: 
         best_val = float("inf")
         start_epoch = 0
@@ -170,7 +172,6 @@ def main():
                 'global_step': global_step
             }, "best_vehi.ckpt")
 
-    
         
 if __name__=="__main__":
     main()

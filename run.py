@@ -1,19 +1,26 @@
 import argparse, json, math, cv2, numpy as np
 from collections import defaultdict
 from ultralytics import YOLO
-from ego import VehicleBProgress
+from src.classification.TimeSformerWrapper import TimeSformerWrapper
+from src.classification.ResNet18PlaceWrapper import ResNet18PlaceWrapper
+from src.classification.video_clip_utils import read_video_as_clip
+from src.ego.VehicleBProgress import VehicleBProgress
 from src.ego.CameraMotion import CameraMotion
-from ego.LaneChange import LaneChange
+from src.ego.LaneChange import LaneChange
 from src.events.schema import to_json_record
 from src.roi.match import match_object_to_roi
 from src.segmentation.YOLOPWrapper import YOLOPWrapper
 from src.types import FrameState, TrackState
 from utils.geometry import xyxy_center, lane_main_angle_deg
-from utils.visualization import overlay_masks, to_bool, vis_roi
+from utils.visualization import overlay_masks, to_bool, put_text
 import json
+import os
 
 
 INTERESTING = {0:"person", 2:"car", 3:"motorcycle", 9:"traffic_light"}
+NUM_OBJ_CLASSES = 4
+NUM_VEH_CLASSES = 9
+CLIP_LEN = 16
 
 def main():
     ap = argparse.ArgumentParser()
@@ -43,37 +50,53 @@ def main():
     yolov8 = YOLO(args.weights)
     yolop = YOLOPWrapper() if args.roi=="yolop" else None
 
-    cam_engine = CameraMotion(fps=fps, ema=0.6, trans_thr=3.5, rot_thr_deg=1.2, cool=10)
-    lane_engine = LaneChange(persist=8, stable_min=3, cool=20)
-    bprog_engine = VehicleBProgress(fps=30, tau_deg = 12, v_stope=0.15, dv_start=0.3, n_stop=10, n_start=6, cooldown=20)
+    obj_model = TimeSformerWrapper(num_classes=NUM_OBJ_CLASSES)
+    obj_model.load_weights("/content/drive/MyDrive/TrafficAccidentSystem/TrafficAccidentSystem/ckpts/best_obj.ckpt")
+    obj_model.eval()
+
+    veh_model = TimeSformerWrapper(num_classes=NUM_VEH_CLASSES)
+    veh_model.load_weights("/content/drive/MyDrive/TrafficAccidentSystem/TrafficAccidentSystem/ckpts/best_vehi.ckpt")
+    veh_model.eval()
+
+    place_model = ResNet18PlaceWrapper(num_classes=15)
+    place_model.load_weights("ckpts/best_resnet18_place.pth")
+    place_model.eval()
+
+    cam_engine = CameraMotion(fps=fps, ema=0.9, trans_thr=5.5, rot_thr_deg=2.2, cool=20)
+    lane_engine = LaneChange(persist=8, cooldown=20, delta_thr=0.08)
+    bprog_engine = VehicleBProgress(fps=30)
 
     per_track_events = defaultdict(list)   # tid -> [events]
     global_events = []                     # camera_shake 등
 
     trajectories = defaultdict(list)
+    pred = {}
     frame_idx = 0
     all_records = []
+
+    video_name = os.path.basename(args.video)  # bb_1_010806_two-wheeled-vehicle_148_275.mp4
+    stem = video_name.split('.')[0]            # bb_1_010806_two-wheeled-vehicle_148_275
+    parts = stem.split('_')                    # ["bb", "1", "010806", "two-wheeled-vehicle", "148", "275"]
+
+    filming_way = parts[0]                     # "bb"
+    video_date  = parts[2]                     # "010806"  (yymmdd)
+
 
     for r in yolov8.track(
         source=args.video, stream=True, tracker=args.tracker, persist=True,
         conf=args.conf, iou=args.iou, verbose=False
     ):
         frame = r.orig_img.copy()
+        H, W = frame.shape[:2]
 
         shake_evt, cam_state = cam_engine.update(frame_idx, frame)
         if shake_evt:
             global_events.append(shake_evt)
-            # 화면에 작은 표시(선택)
-            cv2.putText(frame, "CAMERA SHAKE!", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 2)
-
 
         # YOLOP ROI
         roi_masks = yolop(frame) if yolop is not None else {"road":None, "lane":None}
-        road = roi_masks.get("road", None)
-        lane = roi_masks.get("lane", None)
-
-        road = to_bool(frame, road)
-        lane = to_bool(frame, lane)
+        road = to_bool(frame, roi_masks.get("road", None))
+        lane = to_bool(frame, roi_masks.get("lane", None))
 
         lc_evt = lane_engine.update(frame_idx, lane)
 
@@ -82,7 +105,12 @@ def main():
 
         frame_vis = overlay_masks(frame, road, lane, alpha=0.35) if yolop else frame
 
-        _, lane_labels = cv2.connectedComponents((roi_masks.get("lane").astype(np.uint8)) if lane is not None else np.zeros((H,W), np.uint8))
+        if lane is not None: 
+            lane_u8 = (lane.astype(np.uint8) if lane.dtype != np.uint8 else lane)
+        else: 
+            lane_u8 = np.zeros((H, W), np.uint8)
+
+        _, lane_labels = cv2.connectedComponents(lane_u8)
         # Framestate
         fs = FrameState(idx=frame_idx, H=H, W=W, 
                         road_mask = road,
@@ -108,19 +136,28 @@ def main():
 
                 t = TrackState(tid=tid, cls=INTERESTING[c], bbox=box, center=(cx, cy),
                                speed=speed, heading=0.0)
+                match_object_to_roi(track=t, fs=fs)
+
                 tracks.append(t)
                 id2bbox[tid] = box
+
+                x1, y1, x2, y2 = map(int, box)
+                cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0,255,0),2)
+                cv2.putText(frame_vis, f"{tid}", (x1, max(y1-10,0)), 
+                            cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 0.7, (0,255,0), 2)
         
-        lane_changes = lc_evt or []
-        for e in lane_changes:
-            per_track_events[e["id"]].append(e)
-            # 시각화(선택)
-            box = id2bbox.get(e["id"])
-            if box is not None: 
-                x1,y1,x2,y2 = map(int, box)
-                cv2.putText(frame_vis, f"Lane Change {e['from']}->{e['to']}", (x1, max(20,y1-10)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 2)
-                break
+        vis_id = 0
+        if lc_evt is not None:
+            global_events.append(lc_evt)
+
+            is_right = lc_evt["type"].endswith("_R")
+            arrow = "- >" if is_right else "< -"
+            txt = f"EGO Lane Change {arrow}  balance={lc_evt['balance']:+.3f}"
+            put_text(frame_vis, txt, rgb=(0,165,255), vis_id=vis_id)
+            vis_id +=1 
+            
+        if shake_evt: 
+            put_text(frame_vis, txt="CAMERA SHAKE!", rgb = (0,0,255), vis_id=vis_id)
 
         for t in tracks:
             records = to_json_record(fs.idx, t, per_track_events.get(t.tid, []))
@@ -132,9 +169,36 @@ def main():
 
     if writer is not None: 
         writer.release()
+    
+    clip = read_video_as_clip(args.video, clip_len= CLIP_LEN)
+    obj_idx, obj_probs = obj_model.predict_single_clip(clip)
+    veh_idx, veh_probs = veh_model.predict_single_clip(clip)
+    
+    # 장소 분류: 비디오의 첫 프레임 사용
+    place_idx, place_probs = place_model.predict_video_frame(args.video, frame_idx=0)
 
+    veh_b_idx = int(pred.get("pred"))
+
+    results = {
+        "video_name": video_name,      # ex) "A001_0001.mp4"
+        "video_date": video_date,      # ex) "241116"
+        "filming_way": filming_way,    # "cc" or "bb"
+
+        "accident_object": int(obj_idx),    # best_obj.ckpt 결과 (0~3)
+        "accident_place": int(place_idx),   # best_resnet18_place.pth 결과 (0~14)
+
+        "vehicle_a_progress_info": int(veh_idx),  # best_veh.ckpt 결과 (0~8)
+        "vehicle_b_progress_info": veh_b_idx,     # VehicleBProgress 결과 
+
+        # 디버깅/후처리를 위한 raw 정보는 따로 넣어두면 좋음
+        "raw": {
+            "vehicle_b_progress_detail": pred,     # pred가 dict면 그대로
+            "events": global_events,
+        }
+    }
     with open(args.save_json, "w", encoding="utf-8") as f:
-        json.dump(all_records, f, ensure_ascii=False, indent=2)
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
 
 if __name__=="__main__":
     main()

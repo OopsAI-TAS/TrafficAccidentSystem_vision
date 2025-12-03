@@ -12,8 +12,8 @@ class LaneChange:
     def update(self, frame_idx, drivable_mask):
         h, w = drivable_mask.shape[:2]
         m = (drivable_mask>0).astype(np.uint8)
-        left = m[:, :w//2].sum()
-        right= m[:, w//2:].sum()
+        left = m[:, :w//2].sum(dtype=np.float64)
+        right= m[:, w//2:].sum(dtype=np.float64)
         total = left + right + 1e-6
         balance = (right - left) / total   # (+) 오른쪽 점유>왼쪽, (-) 반대
         self.hist.append(balance)

@@ -24,8 +24,8 @@ class CameraMotion:
         p0 = cv2.goodFeaturesToTrack(self.prev_gray, maxCorners=500, qualityLevel=0.01, minDistance=8)
         if p0 is None or len(p0)<20:
             self.prev_gray = gray
-            return None, None
-
+            return None, getattr(self, "state", {})
+        
         p1, st, err = cv2.calcOpticalFlowPyrLK(self.prev_gray, gray, p0, None,
                                                winSize=(21,21), maxLevel=3,
                                                criteria=(cv2.TERM_CRITERIA_EPS|cv2.TERM_CRITERIA_COUNT, 30, 0.01))
@@ -33,21 +33,23 @@ class CameraMotion:
         self.prev_gray = gray
         if len(good0)<15:
             self.prev_gray = gray
-            return None
+            return None, getattr(self, "state", {})
 
         # 전역 변환 추정 (유사변환: 회전+스케일+이동)
         M, inliers = cv2.estimateAffinePartial2D(good0, good1, method=cv2.RANSAC, ransacReprojThreshold=3.0, maxIters=2000, refineIters=15)
         if M is None:
-            return None
+            return None, getattr(self, "state", {})
 
         dx, dy = M[0,2], M[1,2]
         # 회전 추정 (scale 무시, 각도만)
         yaw = math.degrees(math.atan2(M[1,0], M[0,0]))
         tmag = math.hypot(dx, dy)
 
+        prev_yaw = 0.0 if not hasattr(self, "state") else float(self.state.get("yaw_deg", 0.0))
+        dyaw = yaw - prev_yaw   
         # EMA
         self.state["t_ema"] = self.ema*self.state["t_ema"] + (1-self.ema)*math.hypot(dx,dy)
-        self.state["r_ema"] = self.ema*self.state["r_ema"] + (1-self.ema)*abs(r)
+        self.state["r_ema"] = self.ema*self.state["r_ema"] + (1-self.ema)*abs(dyaw)
         self.state["yaw_deg"] = yaw
         self.state["speed"] = self.state["t_ema"]
 

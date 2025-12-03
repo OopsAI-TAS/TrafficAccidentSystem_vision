@@ -1,5 +1,7 @@
 import torch 
 import torch.nn as nn
+import numpy as np
+from PIL import Image
 from transformers import AutoImageProcessor, TimesformerForVideoClassification
 
 
@@ -25,7 +27,7 @@ class TimeSformerWrapper(nn.Module):
         self.freeze_backbone(except_head=True)
 
     def load_weights(self, ckpt_path: str):
-        ckpt = torch.loas(ckpt_path, map_location="cpu")
+        ckpt = torch.load(ckpt_path, map_location="cpu")
         state = ckpt.get("model_state_dict", ckpt)
         self.model.load_state_dict(state, strict=False)
 
@@ -77,3 +79,32 @@ class TimeSformerWrapper(nn.Module):
         )
 
         return {k: v for k, v in processed.items()}
+    
+    def predict_single_clip(self, clip):
+        """
+        clip: [frame1, frame2, ...]
+            각 frame은 PIL.Image 또는 numpy array 가능
+        return: (pred_idx, probs_list)
+        """
+        # numpy array → PIL.Image 변환 처리
+        processed_clip = []
+        for f in clip:
+            if isinstance(f, np.ndarray):
+                # numpy array는 RGB라고 가정
+                processed_clip.append(Image.fromarray(f))
+            else:
+                # PIL.Image 그대로
+                processed_clip.append(f)
+
+        batch = [processed_clip]  # B = 1
+
+        with torch.no_grad():
+            outputs = self.forward(batch)
+            if hasattr(outputs, "logits"):
+                logits = outputs.logits
+            else:
+                logits = outputs
+            probs = torch.softmax(logits, dim=-1)[0].cpu().tolist()
+            pred_idx = int(np.argmax(probs))
+            
+        return pred_idx, probs

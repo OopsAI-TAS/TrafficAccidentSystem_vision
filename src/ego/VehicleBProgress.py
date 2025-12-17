@@ -51,11 +51,19 @@ class VehicleBProgress:
         # wrap to [-180,180]
         delta = ( (delta + 180) % 360 ) - 180
 
-        # 3) 상태 결정 우선순위
+        # 3) 상태 결정 우선순위 (회전 우선 체크)
         state = "straight"
         reason = {}
 
-        if stopping:
+        # 회전을 먼저 체크 (각도가 명확한 지표)
+        if delta > self.tau:
+            state = CLASSES.get("left_turn")
+            reason["delta_deg"] = round(delta, 2)
+        elif delta < -self.tau:
+            state = CLASSES.get("right_turn")
+            reason["delta_deg"] = round(delta, 2)
+        # 회전이 아니면 속도 기반 판단
+        elif stopping:
             state = CLASSES.get("stopping")
             reason["stop_frames"] = self.n_stop
         elif starting:
@@ -65,12 +73,6 @@ class VehicleBProgress:
             state = lane_change_evt["type"]
             reason["balance"] = lane_change_evt["balance"]
             self.last_emit = frame_idx
-        elif delta > self.tau:
-            state = CLASSES.get("left_turn")
-            reason["delta_deg"] = round(delta, 2)
-        elif delta < -self.tau:
-            state = CLASSES.get("right_turn")
-            reason["delta_deg"] = round(delta, 2)
         else:
             state = CLASSES.get("straight")
             reason["delta_deg"] = round(delta, 2)

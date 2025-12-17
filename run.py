@@ -27,13 +27,25 @@ def main():
     ap.add_argument("--video", type=str, required=True)
     ap.add_argument("--weights", type=str, default="yolo_trained/yolov8n.pt")
     ap.add_argument("--tracker", type=str, default="bytetrack.yaml") # or strongsort.yaml
-    ap.add_argument("--save_video", type=str, default="output/tracked.mp4")
-    ap.add_argument("--save_json", type=str, default="output/trajectories.json")
+    ap.add_argument("--save_video", type=str, default=None)
+    ap.add_argument("--save_json", type=str, default=None)
     ap.add_argument("--conf", type=float, default=0.3)
     ap.add_argument("--iou", type=float, default=0.5)
     ap.add_argument("--roi", type=str, default="yolop", choices=["none","yolop"])
     args = ap.parse_args()
 
+    # 비디오 이름에서 확장자를 제거한 이름 추출
+    video_basename = os.path.basename(args.video)
+    video_name_without_ext = os.path.splitext(video_basename)[0]
+    
+    # 출력 디렉토리 생성
+    os.makedirs("output", exist_ok=True)
+    
+    # 저장 경로가 지정되지 않았을 경우 자동 생성
+    if args.save_video is None:
+        args.save_video = f"output/{video_name_without_ext}_tracked.mp4"
+    if args.save_json is None:
+        args.save_json = f"output/{video_name_without_ext}_trajectories.json"
 
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened(): raise RuntimeError("비디오 열기 실패")
@@ -58,13 +70,21 @@ def main():
     veh_model.load_weights("/content/drive/MyDrive/TrafficAccidentSystem/TrafficAccidentSystem/ckpts/best_vehi.ckpt")
     veh_model.eval()
 
-    place_model = ResNet18PlaceWrapper(num_classes=15)
+    place_model = ResNet18PlaceWrapper(num_classes=13)
     place_model.load_weights("ckpts/best_resnet18_place.pth")
     place_model.eval()
 
     cam_engine = CameraMotion(fps=fps, ema=0.9, trans_thr=5.5, rot_thr_deg=2.2, cool=20)
     lane_engine = LaneChange(persist=8, cooldown=20, delta_thr=0.08)
-    bprog_engine = VehicleBProgress(fps=30)
+    bprog_engine = VehicleBProgress(
+        fps=30,
+        tau_deg=6,        # 12 → 6 (회전을 매우 민감하게)
+        v_stop=0.25,      # 0.15 → 0.25 (정지를 더 확실하게만)
+        dv_start=0.15,    # 0.3 → 0.15 (출발을 쉽게)
+        n_stop=6,         # 10 → 6
+        n_start=4,        # 6 → 4
+        cooldown=15       # 20 → 15 (차선변경 감지 빈도 증가)
+    )
 
     per_track_events = defaultdict(list)   # tid -> [events]
     global_events = []                     # camera_shake 등

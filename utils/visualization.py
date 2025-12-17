@@ -1,4 +1,5 @@
 import numpy as np
+import cv2
 
 def to_bool(img, m):
     H, W = img.shape[:2]
@@ -30,20 +31,6 @@ def overlay_masks(img, road, lane, alpha=0.5):
     out[mask_region] = np.clip(blend, 0, 255).astype(np.uint8)
     return out
 
-def vis_roi(frame, road_mask, lane_mask, box, on_road, on_lane):
-    import cv2, numpy as np
-    over = frame.copy()
-    if road_mask is not None:
-        over[road_mask.astype(bool)] = (50,180,50)     # road BGR
-    if lane_mask is not None:
-        over[lane_mask.astype(bool)] = (180,50,50)     # lane BGR
-    vis = cv2.addWeighted(frame, 0.65, over, 0.35, 0)
-
-    x1,y1,x2,y2 = map(int, box)
-    cx = int((x1+x2)/2); fy = int(y2)
-    cv2.circle(vis, (cx, fy), 5, (0,255,0) if on_road else (0,0,255), -1)
-    cv2.circle(vis, (cx, fy-8), 4, (255,0,0) if on_lane else (0,165,255), -1)
-    cv2.rectangle(vis, (x1,y1), (x2,y2), (255,255,255), 1)
-    cv2.putText(vis, f"road={on_road} lane={on_lane}", (x1, max(0,y1-5)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
-    return vis
+def put_text(frame_vis, txt, rgb, vis_id): 
+    cv2.putText(frame_vis, txt, (20*(vis_id+1), 70*(vis_id+1)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, rgb, 2)
